@@ -1,0 +1,228 @@
+{
+  "openapi": "3.0.2",
+  "info": {
+    "title": "ortelius-ms-textfile-crud",
+    "description": "RestAPI endpoint for retrieving SBOM data to a component",
+    "contact": {
+      "name": "Ortelius Open Source Project",
+      "url": "https://github.com/ortelius/ortelius/issues",
+      "email": "support@ortelius.io"
+    },
+    "license": {
+      "name": "Apache 2.0",
+      "url": "https://www.apache.org/licenses/LICENSE-2.0.html"
+    },
+    "version": "10.0.0"
+  },
+  "servers": [
+    {
+      "url": "http://localhost:5004",
+      "description": "Local Server"
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": ["health"],
+        "summary": "Health",
+        "description": "This health check end point used by Kubernetes",
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusMsg"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/msapi/textfile": {
+      "get": {
+        "tags": ["textfile"],
+        "summary": "Get File Content",
+        "operationId": "get_file_content_msapi_textfile_get",
+        "parameters": [
+          {
+            "required": true,
+            "schema": {
+              "title": "Compid",
+              "minimum": 1,
+              "type": "integer"
+            },
+            "name": "compid",
+            "in": "query"
+          },
+          {
+            "required": true,
+            "schema": {
+              "title": "Filetype",
+              "pattern": "^(?!\\s*$).+",
+              "type": "string"
+            },
+            "name": "filetype",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": ["textfile-post"],
+        "summary": "Save File Content",
+        "operationId": "save_file_content_msapi_textfile_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FileRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "FileRequest": {
+        "title": "FileRequest",
+        "required": ["compid", "filetype", "file"],
+        "type": "object",
+        "properties": {
+          "compid": {
+            "title": "Compid",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "filetype": {
+            "title": "Filetype",
+            "pattern": "^(?!\\s*$).+",
+            "type": "string"
+          },
+          "file": {
+            "title": "File",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "HTTPValidationError": {
+        "title": "HTTPValidationError",
+        "type": "object",
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            }
+          }
+        }
+      },
+      "StatusMsg": {
+        "title": "StatusMsg",
+        "required": ["status", "service_name"],
+        "type": "object",
+        "properties": {
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "service_name": {
+            "title": "Service Name",
+            "type": "string"
+          }
+        }
+      },
+      "ValidationError": {
+        "title": "ValidationError",
+        "required": ["loc", "msg", "type"],
+        "type": "object",
+        "properties": {
+          "loc": {
+            "title": "Location",
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            }
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "health",
+      "description": "health check end point"
+    },
+    {
+      "name": "textfile",
+      "description": "Retrieve the text file"
+    },
+    {
+      "name": "textfile-post",
+      "description": "Save the text file"
+    }
+  ]
+}
