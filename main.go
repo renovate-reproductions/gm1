@@ -1,10 +1,14 @@
+// Package main - Ortelius CLI for adding Component Versions to the DB from the CI/CD pipeline
 package main
 
 import (
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
+	"path"
 	"strings"
 	"time"
 
@@ -14,11 +18,12 @@ import (
 )
 
 const (
-	LicenseFile int = 0
-	SwaggerFile int = 1
-	ReadmeFile  int = 2
+	LicenseFile int = 0 // LicenseFile is used to read the License file
+	SwaggerFile int = 1 // SwaggerFile is used to read the Swagger/OpenApi file
+	ReadmeFile  int = 2 // ReadmeFile is used to read the Readme file
 )
 
+// resolveVars will resolve the ${var} with a value from the component.toml or environment variables
 func resolveVars(val string, data map[interface{}]interface{}) string {
 
 	for k, v := range data {
@@ -39,9 +44,10 @@ func resolveVars(val string, data map[interface{}]interface{}) string {
 	return val
 }
 
+// getCompToml reads the component.toml file and assignes the key/values to the fields in the CompAttrs struct
 func getCompToml(derivedAttrs map[string]string) (model.CompAttrs, map[string]string) {
-	var extraAttrs map[string]string
 	var attrs model.CompAttrs
+	extraAttrs := make(map[string]string, 0)
 
 	for k, v := range derivedAttrs {
 
@@ -50,10 +56,14 @@ func getCompToml(derivedAttrs map[string]string) (model.CompAttrs, map[string]st
 		}
 
 		switch strings.ToUpper(k) {
+		case "BASENAME":
+			attrs.Basename = v
 		case "BLDDATE":
 			attrs.BuildDate = v
 		case "BUILDID":
 			attrs.BuildID = v
+		case "BUILDNUM":
+			attrs.BuildNum = v
 		case "BUILDURL":
 			attrs.BuildURL = v
 		case "CHART":
@@ -74,14 +84,58 @@ func getCompToml(derivedAttrs map[string]string) (model.CompAttrs, map[string]st
 			attrs.DockerSha = v
 		case "DOCKERTAG":
 			attrs.DockerTag = v
-		case "GITCOMMIt":
+		case "SHORT_SHA":
 			attrs.GitCommit = v
+		case "GIT_BRANCH":
+			attrs.GitBranch = v
+		case "GIT_BRANCH_PARENT":
+			attrs.GitBranchParent = v
+		case "GIT_BRANCH_CREATE_COMMIT":
+			attrs.GitBranchCreateCommit = v
+		case "GIT_BRANCH_CREATE_TIMESTAMP":
+			attrs.GitBranchCreateTimestamp = v
+		case "GIT_COMMIT":
+			attrs.GitCommit = v
+		case "GITCOMMIT":
+			attrs.GitCommit = v
+		case "GIT_COMMIT_AUTHORS":
+			attrs.GitCommitAuthors = v
+		case "GIT_COMMIT_TIMESTAMP":
+			attrs.GitCommitTimestamp = v
+		case "GIT_COMMITTERS_CNT":
+			attrs.GitCommittersCnt = v
+		case "GIT_CONTRIB_PERCENTAGE":
+			attrs.GitContribPercentage = v
+		case "GIT_LINES_ADDED":
+			attrs.GitLinesAdded = v
+		case "GIT_LINES_DELETED":
+			attrs.GitLinesDeleted = v
+		case "GIT_LINES_TOTAL":
+			attrs.GitLinesTotal = v
+		case "GIT_ORG":
+			attrs.GitOrg = v
+		case "GIT_PREVIOUS_COMPONENT_COMMIT":
+			attrs.GitPrevCompCommit = v
+		case "GIT_REPO_PROJECT":
+			attrs.GitRepoProject = v
+		case "GIT_REPO":
+			attrs.GitRepo = v
 		case "GITREPO":
 			attrs.GitRepo = v
+		case "GIT_TAG":
+			attrs.GitTag = v
 		case "GITTAG":
 			attrs.GitTag = v
+		case "GIT_TOTAL_COMMITTERS_CNT  ":
+			attrs.GitTotalCommittersCnt = v
+		case "GIT_URL":
+			attrs.GitURL = v
 		case "GITURL":
 			attrs.GitURL = v
+		case "GIT_VERIFY_COMMIT":
+			attrs.GitVerifyCommit = v
+		case "GIT_SIGNED_OFF_BY":
+			attrs.GitSignedOffBy = v
 		case "HIPCHATCHANNEL":
 			attrs.HipchatChannel = v
 		case "PAGERDUTYBUSINESSURL":
@@ -90,10 +144,11 @@ func getCompToml(derivedAttrs map[string]string) (model.CompAttrs, map[string]st
 			attrs.PagerdutyURL = v
 		case "REPOSITORY":
 			attrs.Repository = v
-			//		case "SERVICEOWNER":
-			//			attrs.ServiceOwner = v
+		case "SERVICEOWNER":
+			attrs.ServiceOwner = makeUser(v)
 		case "SLACKCHANNEL":
 			attrs.SlackChannel = v
+
 		}
 	}
 
@@ -172,6 +227,7 @@ func getCompToml(derivedAttrs map[string]string) (model.CompAttrs, map[string]st
 	return attrs, extraAttrs
 }
 
+// gatherFile finds and reads the license, swagger or readme into a string array
 func gatherFile(filetype int) []string {
 
 	lines := make([]string, 0)
@@ -226,44 +282,51 @@ func gatherFile(filetype int) []string {
 	return lines
 }
 
-func run_git(cmdline string) string {
-    cmd := exec.Command(cmdline)
-    output, _ := cmd.CombinedOutput()
-    return string(output)
+// runGit executes a shell command and returns the output as a string
+func runGit(cmdline string) string {
+	cmd := exec.Command("sh", "-c", cmdline)
+	output, _ := cmd.CombinedOutput()
+
+	return strings.TrimSuffix(string(output), "\n")
 }
 
+// getWithDefault is a helper function for finding a key in a map and return a default value if the key is not found
+func getWithDefault(m map[string]string, key string, defaultStr string) string {
+	if x, found := m[key]; found {
+		return x
+	}
+	return defaultStr
+}
+
+// getDerived will run commands in the current working directory to derive data mainly from git
 func getDerived() map[string]string {
-	var mapping map[string]string
+	mapping := make(map[string]string, 0)
 
-    run_git("git fetch --unshallow")
+	runGit("git fetch --unshallow 2>/dev/null")
 
-    mapping["BLDDATE"] = time.Now().UTC().String()
-    mapping["SHORT_SHA"] = run_git("git log --oneline -n 1 | cut -d' '  -f1")
-    mapping["GIT_COMMIT"] = run_git("git log --oneline -n 1 | cut -d' '  -f1")
-    mapping["GIT_VERIFY_COMMIT"] = run_git("git verify-commit " + mapping.get("GIT_COMMIT","") + " 2>&1 | grep -i 'Signature made' | wc -l")
-    mapping["GIT_SIGNED_OFF_BY"] = run_git("git log -1 " + mapping.get("GIT_COMMIT","") + " | grep 'Signed-off-by:' | cut -d: -f2 | sed 's/^[ \t]*//;s/[ \t]*$//' | sed 's/&/\\&amp;/g; s/</\\&lt;/g; s/>/\\&gt;/g;'")
-    mapping["BUILDNUM"] = run_git('git log --oneline | wc -l | tr -d " "')
-    mapping["GIT_REPO"] = run_git("git config --get remote.origin.url | awk -F/ '{print $(NF-1)\"/\"$NF}'| sed 's/.git$//'")
-    mapping["GIT_REPO_PROJECT"] = run_git("git config --get remote.origin.url | awk -F/ '{print $(NF-1)}'")
-    mapping["GIT_ORG"] = run_git("git config --get remote.origin.url | awk -F/ '{print $NF}'| sed 's/.git$//'")
-    mapping["GIT_URL"] = run_git("git config --get remote.origin.url")
-    mapping["GIT_BRANCH"] = run_git("git rev-parse --abbrev-ref HEAD")
-    mapping["GIT_COMMIT_TIMESTAMP"] = run_git("git log --pretty='format:%%cd' " + mapping.get("SHORT_SHA", "") + " | head -1")
-    mapping["GIT_BRANCH_PARENT"] = run_git('git show-branch -a 2>/dev/null | sed "s/].*//" | grep "\\*" | grep -v "$(git rev-parse --abbrev-ref HEAD)" | head -n1 | sed "s/^.*\\[//"')
-    mapping["GIT_BRANCH_CREATE_COMMIT"] = run_git("git log --oneline --reverse " + mapping.get("GIT_BRANCH_PARENT", "main") + ".." + mapping.get("GIT_BRANCH") + " | head -1 | awk -F' ' '{print $1}'")
-    mapping["GIT_BRANCH_CREATE_TIMESTAMP"] = run_git("git log --pretty='format:%cd' " + mapping.get("GIT_BRANCH_CREATE_COMMIT", "HEAD") + " | head -1")
-    mapping["GIT_COMMIT_AUTHORS"] = run_git(
-        "git rev-list --remotes --pretty --since='"
-        + mapping.get("GIT_BRANCH_CREATE_TIMESTAMP", "")
-        + "' --until='"
-        + mapping.get("GIT_COMMIT_TIMESTAMP", "")
-        + "' | grep -i 'Author:' | grep -v dependabot | awk -F'[:<>]' '{print $3}' | sed 's/^ //' | sed 's/ $//' | sort -u | tr '\n' ',' | sed 's/,$//'"
-    )
-    mapping["GIT_LINES_TOTAL"] = run_git("wc -l $(git ls-files) | grep total | awk -F' ' '{print $1}'")
-    mapping["BASENAME"] = os.path.basename(os.getcwd())
+	mapping["BLDDATE"] = time.Now().UTC().String()
+	mapping["SHORT_SHA"] = runGit("git log --oneline -n 1 | cut -d' '  -f1")
+	mapping["GIT_COMMIT"] = runGit("git log --oneline -n 1 | cut -d' '  -f1")
+	mapping["GIT_VERIFY_COMMIT"] = runGit("git verify-commit " + getWithDefault(mapping, "GIT_COMMIT", "") + " 2>&1 | grep -i 'Signature made' | wc -l")
+	mapping["GIT_SIGNED_OFF_BY"] = runGit("git log -1 " + getWithDefault(mapping, "GIT_COMMIT", "") + " | grep 'Signed-off-by:' | cut -d: -f2 | sed 's/^[ \t]*//;s/[ \t]*$//' | sed 's/&/\\&amp;/g; s/</\\&lt;/g; s/>/\\&gt;/g;'")
+	mapping["BUILDNUM"] = runGit("git log --oneline | wc -l | tr -d \" \"")
+	mapping["GIT_REPO"] = runGit("git config --get remote.origin.url | awk -F/ '{print $(NF-1)\"/\"$NF}'| sed 's/.git$//'")
+	mapping["GIT_REPO_PROJECT"] = runGit("git config --get remote.origin.url | awk -F/ '{print $(NF-1)}'")
+	mapping["GIT_ORG"] = runGit("git config --get remote.origin.url | awk -F/ '{print $NF}'| sed 's/.git$//'")
+	mapping["GIT_URL"] = runGit("git config --get remote.origin.url")
+	mapping["GIT_BRANCH"] = runGit("git rev-parse --abbrev-ref HEAD")
+	mapping["GIT_COMMIT_TIMESTAMP"] = runGit("git log --pretty='format:%cd' " + getWithDefault(mapping, "SHORT_SHA", "") + " | head -1")
+	mapping["GIT_BRANCH_PARENT"] = runGit("git show-branch -a 2>/dev/null | sed \"s/].*//\" | grep \"\\*\" | grep -v \"$(git rev-parse --abbrev-ref HEAD)\" | head -n1 | sed \"s/^.*\\[//\"")
+	mapping["GIT_BRANCH_CREATE_COMMIT"] = runGit("git log --oneline --reverse " + getWithDefault(mapping, "GIT_BRANCH_PARENT", "main") + ".." + getWithDefault(mapping, "GIT_BRANCH", "main") + " | head -1 | awk -F' ' '{print $1}'")
+	mapping["GIT_BRANCH_CREATE_TIMESTAMP"] = runGit("git log --pretty='format:%cd' " + getWithDefault(mapping, "GIT_BRANCH_CREATE_COMMIT", "HEAD") + " | head -1")
+	mapping["GIT_COMMIT_AUTHORS"] = runGit("git rev-list --remotes --pretty --since='" + getWithDefault(mapping, "GIT_BRANCH_CREATE_TIMESTAMP", "") + "' --until='" + getWithDefault(mapping, "GIT_COMMIT_TIMESTAMP", "") + "' | grep -i 'Author:' | grep -v dependabot | awk -F'[:<>]' '{print $3}' | sed 's/^ //' | sed 's/ $//' | sort -u | tr '\n' ',' | sed 's/,$//'")
+	mapping["GIT_LINES_TOTAL"] = runGit("wc -l $(git ls-files) | grep total | awk -F' ' '{print $1}'")
+	cwd, _ := os.Getwd()
+	mapping["BASENAME"] = path.Base(cwd)
 	return mapping
 }
 
+// makeUser takes a string and creates a User struct.  Handles setting the domain if the string contains dots.
 func makeUser(name string) model.User {
 	var user model.User
 
@@ -279,9 +342,11 @@ func makeUser(name string) model.User {
 	return user
 }
 
+// gatherEvidence collects data from the component.toml and git repo for the component version
 func gatherEvidence(Userid string, Password string) {
 
-	create_time := time.Now().UTC()
+	fmt.Println(Password)
+	createTime := time.Now().UTC()
 	user := makeUser(Userid)
 	license := model.License{Content: gatherFile(LicenseFile)}
 	swagger := model.Swagger{Content: gatherFile(SwaggerFile)}
@@ -294,7 +359,7 @@ func gatherEvidence(Userid string, Password string) {
 
 	compver.Attrs = attrs
 	compver.CompType = "docker"
-	compver.Created = create_time
+	compver.Created = createTime
 	compver.Creator = user
 	//	compver.Domain = domain
 	compver.License = license
@@ -314,6 +379,7 @@ func gatherEvidence(Userid string, Password string) {
 	io.Copy(os.Stdout, resp.Body)
 }
 
+// main is the entrypoint for the CLI.  Takes --user and --pass parameters
 func main() {
 	type argT struct {
 		cli.Helper

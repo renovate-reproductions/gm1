@@ -4,7 +4,7 @@ go 1.20
 
 require (
 	github.com/mkideal/cli v0.2.7
-	github.com/ortelius/scec-commons v0.1.4
+	github.com/ortelius/scec-commons v0.1.5
 )
 
 require (
