@@ -2,17 +2,24 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
-	"io"
+	"io/ioutil"
 	"log"
-	"net/http"
 	"os"
 	"os/exec"
 	"path"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/araddon/dateparse"
+
+	cid "github.com/ipfs/go-cid"
 	"github.com/mkideal/cli"
+	mc "github.com/multiformats/go-multicodec"
+	mh "github.com/multiformats/go-multihash"
 	"github.com/ortelius/scec-commons/model"
 	toml "github.com/pelletier/go-toml"
 )
@@ -59,7 +66,8 @@ func getCompToml(derivedAttrs map[string]string) (model.CompAttrs, map[string]st
 		case "BASENAME":
 			attrs.Basename = v
 		case "BLDDATE":
-			attrs.BuildDate = v
+			t, _ := dateparse.ParseAny(v)
+			attrs.BuildDate = t
 		case "BUILDID":
 			attrs.BuildID = v
 		case "BUILDNUM":
@@ -93,7 +101,8 @@ func getCompToml(derivedAttrs map[string]string) (model.CompAttrs, map[string]st
 		case "GIT_BRANCH_CREATE_COMMIT":
 			attrs.GitBranchCreateCommit = v
 		case "GIT_BRANCH_CREATE_TIMESTAMP":
-			attrs.GitBranchCreateTimestamp = v
+			t, _ := dateparse.ParseAny(v)
+			attrs.GitBranchCreateTimestamp = t
 		case "GIT_COMMIT":
 			attrs.GitCommit = v
 		case "GITCOMMIT":
@@ -101,7 +110,8 @@ func getCompToml(derivedAttrs map[string]string) (model.CompAttrs, map[string]st
 		case "GIT_COMMIT_AUTHORS":
 			attrs.GitCommitAuthors = v
 		case "GIT_COMMIT_TIMESTAMP":
-			attrs.GitCommitTimestamp = v
+			t, _ := dateparse.ParseAny(v)
+			attrs.GitCommitTimestamp = t
 		case "GIT_COMMITTERS_CNT":
 			attrs.GitCommittersCnt = v
 		case "GIT_CONTRIB_PERCENTAGE":
@@ -133,7 +143,10 @@ func getCompToml(derivedAttrs map[string]string) (model.CompAttrs, map[string]st
 		case "GITURL":
 			attrs.GitURL = v
 		case "GIT_VERIFY_COMMIT":
-			attrs.GitVerifyCommit = v
+			attrs.GitVerifyCommit = false
+			if v == "1" {
+				attrs.GitVerifyCommit = true
+			}
 		case "GIT_SIGNED_OFF_BY":
 			attrs.GitSignedOffBy = v
 		case "HIPCHATCHANNEL":
@@ -145,7 +158,7 @@ func getCompToml(derivedAttrs map[string]string) (model.CompAttrs, map[string]st
 		case "REPOSITORY":
 			attrs.Repository = v
 		case "SERVICEOWNER":
-			attrs.ServiceOwner = makeUser(v)
+			attrs.ServiceOwner.Name, attrs.ServiceOwner.Domain = makeName(v)
 		case "SLACKCHANNEL":
 			attrs.SlackChannel = v
 
@@ -162,7 +175,6 @@ func getCompToml(derivedAttrs map[string]string) (model.CompAttrs, map[string]st
 	var data map[interface{}]interface{}
 
 	err = toml.Unmarshal(f, &data)
-	log.Println(data)
 
 	if err != nil {
 		log.Println(err)
@@ -172,13 +184,67 @@ func getCompToml(derivedAttrs map[string]string) (model.CompAttrs, map[string]st
 	for k, v := range data {
 		switch t := v.(type) {
 		case map[string]interface{}:
-			for a, b := range t {
-				extraAttrs[a] = resolveVars(b.(string), data)
+			{
+				// Look for well known attributes from component.toml [Attributes] section and assign them
+				for a, b := range t {
+					switch strings.ToUpper(a) {
+					case "BLDDATE":
+						t, _ := dateparse.ParseAny(resolveVars(b.(string), data))
+						attrs.BuildDate = t
+					case "BUILDID":
+						attrs.BuildID = resolveVars(b.(string), data)
+					case "BUILDURL":
+						attrs.BuildURL = resolveVars(b.(string), data)
+					case "CHART":
+						attrs.Chart = resolveVars(b.(string), data)
+					case "CHARTNAMESPACE":
+						attrs.ChartNamespace = resolveVars(b.(string), data)
+					case "CHARTREPO":
+						attrs.ChartRepo = resolveVars(b.(string), data)
+					case "CHARTREPOURL":
+						attrs.ChartRepoURL = resolveVars(b.(string), data)
+					case "CHARTVERSION":
+						attrs.ChartVersion = resolveVars(b.(string), data)
+					case "DISCORDCHANNEL":
+						attrs.DiscordChannel = resolveVars(b.(string), data)
+					case "DOCKERREPO":
+						attrs.DockerRepo = resolveVars(b.(string), data)
+					case "DOCKERSHA":
+						attrs.DockerSha = resolveVars(b.(string), data)
+					case "DOCKERTAG":
+						attrs.DockerTag = resolveVars(b.(string), data)
+					case "GITCOMMIt":
+						attrs.GitCommit = resolveVars(b.(string), data)
+					case "GITREPO":
+						attrs.GitRepo = resolveVars(b.(string), data)
+					case "GITTAG":
+						attrs.GitTag = resolveVars(b.(string), data)
+					case "GITURL":
+						attrs.GitURL = resolveVars(b.(string), data)
+					case "HIPCHATCHANNEL":
+						attrs.HipchatChannel = resolveVars(b.(string), data)
+					case "PAGERDUTYBUSINESSURL":
+						attrs.PagerdutyBusinessURL = resolveVars(b.(string), data)
+					case "PAGERDUTYURL":
+						attrs.PagerdutyURL = resolveVars(b.(string), data)
+					case "REPOSITORY":
+						attrs.Repository = resolveVars(b.(string), data)
+					case "SERVICEOWNER":
+						attrs.ServiceOwner.Name, attrs.ServiceOwner.Domain = makeName(resolveVars(b.(string), data))
+					case "SLACKCHANNEL":
+						attrs.SlackChannel = resolveVars(b.(string), data)
+					default:
+						extraAttrs[strings.ToUpper(a)] = resolveVars(b.(string), data)
+					}
+				}
 			}
 		case string:
+
+			// Look for well known attributes at the root of the component.toml and assign them
 			switch strings.ToUpper(k.(string)) {
 			case "BLDDATE":
-				attrs.BuildDate = resolveVars(v.(string), data)
+				t, _ := dateparse.ParseAny(resolveVars(v.(string), data))
+				attrs.BuildDate = t
 			case "BUILDID":
 				attrs.BuildID = resolveVars(v.(string), data)
 			case "BUILDURL":
@@ -217,10 +283,12 @@ func getCompToml(derivedAttrs map[string]string) (model.CompAttrs, map[string]st
 				attrs.PagerdutyURL = resolveVars(v.(string), data)
 			case "REPOSITORY":
 				attrs.Repository = resolveVars(v.(string), data)
-				//		case "SERVICEOWNER":
-				//			attrs.ServiceOwner = resolveVars(v.(string), data)
+			case "SERVICEOWNER":
+				attrs.ServiceOwner.Name, attrs.ServiceOwner.Domain = makeName(resolveVars(v.(string), data))
 			case "SLACKCHANNEL":
 				attrs.SlackChannel = resolveVars(v.(string), data)
+			default:
+				extraAttrs[strings.ToUpper(k.(string))] = resolveVars(v.(string), data)
 			}
 		}
 	}
@@ -277,6 +345,7 @@ func gatherFile(filetype int) []string {
 		}
 
 		lines = strings.Split(string(data), "\n")
+
 		return lines
 	}
 	return lines
@@ -307,76 +376,172 @@ func getDerived() map[string]string {
 	mapping["BLDDATE"] = time.Now().UTC().String()
 	mapping["SHORT_SHA"] = runGit("git log --oneline -n 1 | cut -d' '  -f1")
 	mapping["GIT_COMMIT"] = runGit("git log --oneline -n 1 | cut -d' '  -f1")
-	mapping["GIT_VERIFY_COMMIT"] = runGit("git verify-commit " + getWithDefault(mapping, "GIT_COMMIT", "") + " 2>&1 | grep -i 'Signature made' | wc -l")
+	mapping["GIT_VERIFY_COMMIT"] = runGit("git verify-commit " + getWithDefault(mapping, "GIT_COMMIT", "") + " 2>&1 | grep -i 'Signature made' | wc -l | tr -d ' '")
 	mapping["GIT_SIGNED_OFF_BY"] = runGit("git log -1 " + getWithDefault(mapping, "GIT_COMMIT", "") + " | grep 'Signed-off-by:' | cut -d: -f2 | sed 's/^[ \t]*//;s/[ \t]*$//' | sed 's/&/\\&amp;/g; s/</\\&lt;/g; s/>/\\&gt;/g;'")
 	mapping["BUILDNUM"] = runGit("git log --oneline | wc -l | tr -d \" \"")
-	mapping["GIT_REPO"] = runGit("git config --get remote.origin.url | awk -F/ '{print $(NF-1)\"/\"$NF}'| sed 's/.git$//'")
-	mapping["GIT_REPO_PROJECT"] = runGit("git config --get remote.origin.url | awk -F/ '{print $(NF-1)}'")
-	mapping["GIT_ORG"] = runGit("git config --get remote.origin.url | awk -F/ '{print $NF}'| sed 's/.git$//'")
+	mapping["GIT_REPO"] = runGit("git config --get remote.origin.url | sed 's#:#/#' | awk -F/ '{print $(NF-1)\"/\"$NF}'| sed 's/.git$//'")
+	mapping["GIT_REPO_PROJECT"] = runGit("git config --get remote.origin.url | sed 's#:#/#' | awk -F/ '{print $NF}' | sed 's/.git$//'")
+	mapping["GIT_ORG"] = runGit("git config --get remote.origin.url | sed 's#:#/#' | awk -F/ '{print $(NF-1)}'")
 	mapping["GIT_URL"] = runGit("git config --get remote.origin.url")
 	mapping["GIT_BRANCH"] = runGit("git rev-parse --abbrev-ref HEAD")
-	mapping["GIT_COMMIT_TIMESTAMP"] = runGit("git log --pretty='format:%cd' " + getWithDefault(mapping, "SHORT_SHA", "") + " | head -1")
+	mapping["GIT_COMMIT_TIMESTAMP"] = runGit("git log --pretty='format:%cd' --date=rfc " + getWithDefault(mapping, "SHORT_SHA", "") + " | head -1")
 	mapping["GIT_BRANCH_PARENT"] = runGit("git show-branch -a 2>/dev/null | sed \"s/].*//\" | grep \"\\*\" | grep -v \"$(git rev-parse --abbrev-ref HEAD)\" | head -n1 | sed \"s/^.*\\[//\"")
 	mapping["GIT_BRANCH_CREATE_COMMIT"] = runGit("git log --oneline --reverse " + getWithDefault(mapping, "GIT_BRANCH_PARENT", "main") + ".." + getWithDefault(mapping, "GIT_BRANCH", "main") + " | head -1 | awk -F' ' '{print $1}'")
-	mapping["GIT_BRANCH_CREATE_TIMESTAMP"] = runGit("git log --pretty='format:%cd' " + getWithDefault(mapping, "GIT_BRANCH_CREATE_COMMIT", "HEAD") + " | head -1")
+	mapping["GIT_BRANCH_CREATE_TIMESTAMP"] = runGit("git log --pretty='format:%cd'  --date=rfc " + getWithDefault(mapping, "GIT_BRANCH_CREATE_COMMIT", "HEAD") + " | head -1")
 	mapping["GIT_COMMIT_AUTHORS"] = runGit("git rev-list --remotes --pretty --since='" + getWithDefault(mapping, "GIT_BRANCH_CREATE_TIMESTAMP", "") + "' --until='" + getWithDefault(mapping, "GIT_COMMIT_TIMESTAMP", "") + "' | grep -i 'Author:' | grep -v dependabot | awk -F'[:<>]' '{print $3}' | sed 's/^ //' | sed 's/ $//' | sort -u | tr '\n' ',' | sed 's/,$//'")
+
+	if len(getWithDefault(mapping, "GIT_COMMIT_AUTHORS", "")) == 0 {
+		mapping["GIT_COMMIT_AUTHORS"] = runGit("git log | grep -i 'Author:' | grep -v dependabot | awk -F'[:<>]' '{print $3}' | sed 's/^ //' | sed 's/ $//' | sort -u | tr '\n' ',' | sed 's/,$//'")
+	}
+
+	mapping["GIT_COMMITTERS_CNT"] = fmt.Sprintf("%d", len(strings.Split(getWithDefault(mapping, "GIT_COMMIT_AUTHORS", ""), ",")))
+
+	committersCnt, _ := strconv.Atoi(getWithDefault(mapping, "GIT_COMMITTERS_CNT", "0"))
+	committersCntTotal, _ := strconv.Atoi(getWithDefault(mapping, "GIT_TOTAL_COMMITTERS_CNT", "0"))
+
+	if committersCntTotal > 0 {
+		mapping["GIT_CONTRIB_PERCENTAGE"] = fmt.Sprintf("%d", int64(float64(committersCnt/committersCntTotal)*100))
+	} else {
+		mapping["GIT_CONTRIB_PERCENTAGE"] = "0"
+	}
+
 	mapping["GIT_LINES_TOTAL"] = runGit("wc -l $(git ls-files) | grep total | awk -F' ' '{print $1}'")
+
+	if len(getWithDefault(mapping, "GIT_PREVIOUS_COMPONENT_COMMIT", "")) > 0 {
+		gitcommit := getWithDefault(mapping, "GIT_PREVIOUS_COMPONENT_COMMIT", "")
+		mapping["GIT_LINES_ADDED"] = runGit("git diff --stat " + getWithDefault(mapping, "SHORT_SHA", "") + " " + gitcommit + " | grep changed | cut -d\" \" -f5")
+		mapping["GIT_LINES_DELETED"] = runGit("git diff --stat " + getWithDefault(mapping, "SHORT_SHA", "") + " " + gitcommit + " | grep changed | cut -d\" \" -f7")
+	} else {
+		mapping["GIT_PREVIOUS_COMPONENT_COMMIT"] = ""
+		mapping["GIT_LINES_ADDED"] = "0"
+		mapping["GIT_LINES_DELETED"] = "0"
+	}
+
+	if len(getWithDefault(mapping, "GIT_COMMIT_TIMESTAMP", "")) > 0 {
+		t, _ := dateparse.ParseAny(getWithDefault(mapping, "GIT_COMMIT_TIMESTAMP", ""))
+		mapping["GIT_COMMIT_TIMESTAMP"] = t.UTC().String()
+	}
+
+	if len(getWithDefault(mapping, "GIT_BRANCH_CREATE_TIMESTAMP", "")) > 0 {
+		t, _ := dateparse.ParseAny(getWithDefault(mapping, "GIT_BRANCH_CREATE_TIMESTAMP", ""))
+		mapping["GIT_BRANCH_CREATE_TIMESTAMP"] = t.UTC().String()
+	}
+
 	cwd, _ := os.Getwd()
 	mapping["BASENAME"] = path.Base(cwd)
+
+	if len(getWithDefault(mapping, "COMPNAME", "")) == 0 {
+		mapping["COMPNAME"] = getWithDefault(mapping, "GIT_REPO_PROJECT", "")
+	}
+
 	return mapping
 }
 
 // makeUser takes a string and creates a User struct.  Handles setting the domain if the string contains dots.
-func makeUser(name string) model.User {
-	var user model.User
+func makeName(name string) (string, model.Domain) {
+	var domain model.Domain
 
 	parts := strings.Split(name, ".")
 	if len(parts) > 1 {
 		name = parts[len(parts)-1]
 		parts = parts[:len(parts)-1]
 
-		user.Domain = model.Domain{Name: strings.Join(parts, ".")}
+		domain = model.Domain{Name: strings.Join(parts, ".")}
 	}
-	user.Name = name
-
-	return user
+	return name, domain
 }
 
 // gatherEvidence collects data from the component.toml and git repo for the component version
 func gatherEvidence(Userid string, Password string) {
 
-	fmt.Println(Password)
+	var user model.User
 	createTime := time.Now().UTC()
-	user := makeUser(Userid)
+	user.Name, user.Domain = makeName(Userid)
 	license := model.License{Content: gatherFile(LicenseFile)}
-	swagger := model.Swagger{Content: gatherFile(SwaggerFile)}
+	swagger := model.Swagger{Content: json.RawMessage([]byte(strings.Join(gatherFile(SwaggerFile), "\n")))}
 	readme := model.Readme{Content: gatherFile(ReadmeFile)}
 
 	derivedAttrs := getDerived()
-	attrs, _ := getCompToml(derivedAttrs)
+	attrs, tomlVars := getCompToml(derivedAttrs)
+
+	//	appname := getWithDefault(tomlVars, "APPLICATION", "")
+	//	appversion := getWithDefault(tomlVars, "APPLICATION_VERSION", "")
 
 	var compver model.ComponentVersionDetails
+
+	compname := getWithDefault(tomlVars, "NAME", "")
+	compvariant := getWithDefault(tomlVars, "VARIANT", "")
+	compversion := getWithDefault(tomlVars, "VERSION", "")
+
+	compbaseversion := compname
+	if len(compvariant) == 0 {
+		compname += ";" + compvariant
+		compbaseversion = compname
+	}
+
+	if len(compversion) == 0 {
+		compname += ";" + compversion
+	}
 
 	compver.Attrs = attrs
 	compver.CompType = "docker"
 	compver.Created = createTime
 	compver.Creator = user
-	//	compver.Domain = domain
 	compver.License = license
-	//	compver.Name = compname
-	//	compver.Owner = Userid
-	//	compver.Packages = sbom
-	//	compver.ParentKey = parent
+	compver.Name, compver.Domain = makeName(compname)
+	compver.Owner.Name, compver.Owner.Domain = makeName(Userid)
+	compver.ParentKey = compbaseversion
 	compver.Readme = readme
 	compver.Swagger = swagger
 
-	URL := "https://cat-fact.herokuapp.com/facts"
-	resp, err := http.Get(URL)
-	if err != nil {
-		log.Fatal(err)
+	// b, err := json.Marshal(compver)
+	//
+	//	if err != nil {
+	//		fmt.Println(err)
+	//		return
+	//	}
+	//
+	// fmt.Println(string(b))
+}
+
+func flattenData(y interface{}) map[string]interface{} {
+	out := make(map[string]interface{})
+
+	var flatten func(x interface{}, name string)
+	flatten = func(x interface{}, name string) {
+		switch v := x.(type) {
+		case map[string]interface{}:
+			for a, b := range v {
+				flatten(b, name+a+".")
+			}
+		case []interface{}:
+			for i, a := range v {
+				flatten(a, name+fmt.Sprintf("%03d.", i))
+			}
+		default:
+			out[name[:len(name)-1]] = x
+		}
 	}
-	defer resp.Body.Close()
-	io.Copy(os.Stdout, resp.Body)
+
+	flatten(y, "")
+	return out
+}
+
+func genCid(jsonStr string) string {
+	var pref = cid.Prefix{
+		Version:  1,
+		Codec:    uint64(mc.Raw),
+		MhType:   mh.SHA2_256,
+		MhLength: -1, // default length
+	}
+
+	_cid, err := pref.Sum([]byte(jsonStr))
+
+	if err != nil {
+		return ""
+	}
+
+	return _cid.String()
 }
 
 // main is the entrypoint for the CLI.  Takes --user and --pass parameters
@@ -389,6 +554,96 @@ func main() {
 
 	os.Exit(cli.Run(new(argT), func(ctx *cli.Context) error {
 		argv := ctx.Argv().(*argT)
+		jsonMap := make(map[string]interface{})
+
+		jsonFile, _ := os.Open("mapping.txt")
+		byteValue, _ := ioutil.ReadAll(jsonFile)
+
+		json.Unmarshal(byteValue, &jsonMap)
+		out := flattenData(jsonMap)
+
+		cidmap := make(map[string][]string) // output dict of grouping to json
+
+		for len(out) > 0 {
+			keys := make([]string, 0, len(out))
+			groupmap := make(map[string][]string)
+
+			for k := range out {
+				keys = append(keys, k)
+			}
+
+			// sort the keys longest (most dots) and then by alpha
+			sort.SliceStable(keys, func(i, j int) bool {
+				lcnt := strings.Count(keys[i], ".")
+				rcnt := strings.Count(keys[j], ".")
+
+				if lcnt == rcnt {
+					return (strings.Compare(keys[i], keys[j]) < 0)
+				}
+				return lcnt > rcnt
+			})
+
+			// find first grouping
+			saveGrp := ""
+			for _, k := range keys {
+				parts := strings.Split(k, ".")
+				key := ""
+				currentGrp := ""
+
+				if len(parts) > 1 {
+					key = parts[len(parts)-1]
+					currentGrp = strings.Join(parts[:len(parts)-1], ".")
+				} else if len(parts) == 1 {
+					currentGrp = "root"
+					key = parts[0]
+				}
+
+				if currentGrp != saveGrp && saveGrp != "" {
+					break
+				}
+				saveGrp = currentGrp
+
+				val := fmt.Sprint(out[k]) // TODO: Need to preserve type
+				jstr := ""
+
+				if _, err := strconv.Atoi(key); err == nil {
+					jstr = val
+				} else {
+					jstr = fmt.Sprintf("\"%s\":\"%s\"", key, val) // TODO: Need to preserve type
+				}
+
+				if jlist, ok := groupmap[currentGrp]; ok {
+					groupmap[currentGrp] = append(jlist, jstr)
+				} else {
+					jlist := []string{jstr}
+					groupmap[currentGrp] = jlist
+				}
+				delete(out, k)
+			}
+
+			for group := range groupmap {
+				sortedJson := groupmap[group]
+				sort.Strings(sortedJson)
+
+				jsonStr := ""
+				if strings.Contains(strings.Join(sortedJson, ","), ":") {
+					jsonStr = "{" + strings.Join(sortedJson, ",") + "}"
+				} else {
+					jsonStr = "[" + strings.Join(sortedJson, ",") + "]"
+				}
+
+				cid := genCid(jsonStr)
+				cidmap[group] = []string{cid, jsonStr}
+
+				if group != "root" {
+					out[group] = cid
+				}
+
+				os.WriteFile("nfts/"+cid+".nft", []byte(jsonStr), 0644)
+				fmt.Printf("%s %s=%s\n", group, cid, jsonStr)
+			}
+		}
+
 		gatherEvidence(argv.Userid, argv.Password)
 		return nil
 	}))
