@@ -4,23 +4,18 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"os"
 	"os/exec"
 	"path"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/araddon/dateparse"
-
-	cid "github.com/ipfs/go-cid"
+	resty "github.com/go-resty/resty/v2"
 	"github.com/mkideal/cli"
-	mc "github.com/multiformats/go-multicodec"
-	mh "github.com/multiformats/go-multihash"
-	"github.com/ortelius/scec-commons/model"
+	model "github.com/ortelius/scec-commons/model"
 	toml "github.com/pelletier/go-toml"
 )
 
@@ -52,8 +47,8 @@ func resolveVars(val string, data map[interface{}]interface{}) string {
 }
 
 // getCompToml reads the component.toml file and assignes the key/values to the fields in the CompAttrs struct
-func getCompToml(derivedAttrs map[string]string) (model.CompAttrs, map[string]string) {
-	var attrs model.CompAttrs
+func getCompToml(derivedAttrs map[string]string) (*model.CompAttrs, map[string]string) {
+	attrs := model.NewCompAttrs()
 	extraAttrs := make(map[string]string, 0)
 
 	for k, v := range derivedAttrs {
@@ -438,15 +433,15 @@ func getDerived() map[string]string {
 }
 
 // makeUser takes a string and creates a User struct.  Handles setting the domain if the string contains dots.
-func makeName(name string) (string, model.Domain) {
-	var domain model.Domain
+func makeName(name string) (string, *model.Domain) {
+	domain := model.NewDomain()
 
 	parts := strings.Split(name, ".")
 	if len(parts) > 1 {
 		name = parts[len(parts)-1]
 		parts = parts[:len(parts)-1]
 
-		domain = model.Domain{Name: strings.Join(parts, ".")}
+		domain.Name = strings.Join(parts, ".")
 	}
 	return name, domain
 }
@@ -454,12 +449,20 @@ func makeName(name string) (string, model.Domain) {
 // gatherEvidence collects data from the component.toml and git repo for the component version
 func gatherEvidence(Userid string, Password string) {
 
-	var user model.User
+	fmt.Printf("%s\n", Password)
+
+	user := model.NewUser()
 	createTime := time.Now().UTC()
 	user.Name, user.Domain = makeName(Userid)
-	license := model.License{Content: gatherFile(LicenseFile)}
-	swagger := model.Swagger{Content: json.RawMessage([]byte(strings.Join(gatherFile(SwaggerFile), "\n")))}
-	readme := model.Readme{Content: gatherFile(ReadmeFile)}
+
+	license := model.NewLicense()
+	license.Content = gatherFile(LicenseFile)
+
+	swagger := model.NewSwagger()
+	swagger.Content = json.RawMessage([]byte(strings.Join(gatherFile(SwaggerFile), "\n")))
+
+	readme := model.NewReadme()
+	readme.Content = gatherFile(ReadmeFile)
 
 	derivedAttrs := getDerived()
 	attrs, tomlVars := getCompToml(derivedAttrs)
@@ -467,7 +470,7 @@ func gatherEvidence(Userid string, Password string) {
 	//	appname := getWithDefault(tomlVars, "APPLICATION", "")
 	//	appversion := getWithDefault(tomlVars, "APPLICATION_VERSION", "")
 
-	var compver model.ComponentVersionDetails
+	compver := model.NewComponentVersionDetails()
 
 	compname := getWithDefault(tomlVars, "NAME", "")
 	compvariant := getWithDefault(tomlVars, "VARIANT", "")
@@ -494,6 +497,15 @@ func gatherEvidence(Userid string, Password string) {
 	compver.Readme = readme
 	compver.Swagger = swagger
 
+	client := resty.New()
+
+	// POST Struct, default is JSON content type. No need to set one
+	resp, err := client.R().
+		SetBody(compver).
+		Post("http://localhost:8080/msapi/compver")
+
+	fmt.Printf("%s=%s", resp, err)
+
 	// b, err := json.Marshal(compver)
 	//
 	//	if err != nil {
@@ -502,46 +514,6 @@ func gatherEvidence(Userid string, Password string) {
 	//	}
 	//
 	// fmt.Println(string(b))
-}
-
-func flattenData(y interface{}) map[string]interface{} {
-	out := make(map[string]interface{})
-
-	var flatten func(x interface{}, name string)
-	flatten = func(x interface{}, name string) {
-		switch v := x.(type) {
-		case map[string]interface{}:
-			for a, b := range v {
-				flatten(b, name+a+".")
-			}
-		case []interface{}:
-			for i, a := range v {
-				flatten(a, name+fmt.Sprintf("%03d.", i))
-			}
-		default:
-			out[name[:len(name)-1]] = x
-		}
-	}
-
-	flatten(y, "")
-	return out
-}
-
-func genCid(jsonStr string) string {
-	var pref = cid.Prefix{
-		Version:  1,
-		Codec:    uint64(mc.Raw),
-		MhType:   mh.SHA2_256,
-		MhLength: -1, // default length
-	}
-
-	_cid, err := pref.Sum([]byte(jsonStr))
-
-	if err != nil {
-		return ""
-	}
-
-	return _cid.String()
 }
 
 // main is the entrypoint for the CLI.  Takes --user and --pass parameters
@@ -554,95 +526,6 @@ func main() {
 
 	os.Exit(cli.Run(new(argT), func(ctx *cli.Context) error {
 		argv := ctx.Argv().(*argT)
-		jsonMap := make(map[string]interface{})
-
-		jsonFile, _ := os.Open("mapping.txt")
-		byteValue, _ := ioutil.ReadAll(jsonFile)
-
-		json.Unmarshal(byteValue, &jsonMap)
-		out := flattenData(jsonMap)
-
-		cidmap := make(map[string][]string) // output dict of grouping to json
-
-		for len(out) > 0 {
-			keys := make([]string, 0, len(out))
-			groupmap := make(map[string][]string)
-
-			for k := range out {
-				keys = append(keys, k)
-			}
-
-			// sort the keys longest (most dots) and then by alpha
-			sort.SliceStable(keys, func(i, j int) bool {
-				lcnt := strings.Count(keys[i], ".")
-				rcnt := strings.Count(keys[j], ".")
-
-				if lcnt == rcnt {
-					return (strings.Compare(keys[i], keys[j]) < 0)
-				}
-				return lcnt > rcnt
-			})
-
-			// find first grouping
-			saveGrp := ""
-			for _, k := range keys {
-				parts := strings.Split(k, ".")
-				key := ""
-				currentGrp := ""
-
-				if len(parts) > 1 {
-					key = parts[len(parts)-1]
-					currentGrp = strings.Join(parts[:len(parts)-1], ".")
-				} else if len(parts) == 1 {
-					currentGrp = "root"
-					key = parts[0]
-				}
-
-				if currentGrp != saveGrp && saveGrp != "" {
-					break
-				}
-				saveGrp = currentGrp
-
-				val := fmt.Sprint(out[k]) // TODO: Need to preserve type
-				jstr := ""
-
-				if _, err := strconv.Atoi(key); err == nil {
-					jstr = val
-				} else {
-					jstr = fmt.Sprintf("\"%s\":\"%s\"", key, val) // TODO: Need to preserve type
-				}
-
-				if jlist, ok := groupmap[currentGrp]; ok {
-					groupmap[currentGrp] = append(jlist, jstr)
-				} else {
-					jlist := []string{jstr}
-					groupmap[currentGrp] = jlist
-				}
-				delete(out, k)
-			}
-
-			for group := range groupmap {
-				sortedJson := groupmap[group]
-				sort.Strings(sortedJson)
-
-				jsonStr := ""
-				if strings.Contains(strings.Join(sortedJson, ","), ":") {
-					jsonStr = "{" + strings.Join(sortedJson, ",") + "}"
-				} else {
-					jsonStr = "[" + strings.Join(sortedJson, ",") + "]"
-				}
-
-				cid := genCid(jsonStr)
-				cidmap[group] = []string{cid, jsonStr}
-
-				if group != "root" {
-					out[group] = cid
-				}
-
-				os.WriteFile("nfts/"+cid+".nft", []byte(jsonStr), 0644)
-				fmt.Printf("%s %s=%s\n", group, cid, jsonStr)
-			}
-		}
 
 		gatherEvidence(argv.Userid, argv.Password)
 		return nil
