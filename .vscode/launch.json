@@ -10,7 +10,7 @@
             "request": "launch",
             "mode": "auto",
             "program": "${fileDirname}",
-            "args": ["--user", "GLOBAL.Apache.foo", "--pass", "bar"],
+            "args": ["--user", "GLOBAL.Apache.foo", "--pass", "bar", "--sbom", "/Users/steve/Downloads/console_dh_keys/cyclonedx.json"],
             "env": {"COMPNAME":"XXX"}
         }
     ]

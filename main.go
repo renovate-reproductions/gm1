@@ -447,7 +447,7 @@ func makeName(name string) (string, *model.Domain) {
 }
 
 // gatherEvidence collects data from the component.toml and git repo for the component version
-func gatherEvidence(Userid string, Password string) {
+func gatherEvidence(Userid string, Password string, SBOM string) {
 
 	fmt.Printf("%s\n", Password)
 
@@ -499,12 +499,31 @@ func gatherEvidence(Userid string, Password string) {
 
 	client := resty.New()
 
+	if _, err := os.Stat(SBOM); err == nil {
+		if data, err := os.ReadFile(SBOM); err == nil {
+			sbom := model.NewSBOM()
+			sbom.Content = json.RawMessage(data)
+
+			// POST Struct, default is JSON content type. No need to set one
+			var res model.ResponseKey
+			resp, err := client.R().
+				SetBody(sbom).
+				SetResult(&res).
+				Post("http://localhost:8081/msapi/sbom")
+
+			fmt.Printf("%s=%v\n", resp, err)
+			fmt.Printf("KEY=%s\n", res.Key)
+
+			compver.SBOMKey = res.Key
+		}
+	}
+
 	// POST Struct, default is JSON content type. No need to set one
 	resp, err := client.R().
 		SetBody(compver).
 		Post("http://localhost:8080/msapi/compver")
 
-	fmt.Printf("%s=%s", resp, err)
+	fmt.Printf("%s=%v\n", resp, err)
 
 	// b, err := json.Marshal(compver)
 	//
@@ -522,12 +541,13 @@ func main() {
 		cli.Helper
 		Userid   string `cli:"*user" usage:"User id (required)"`
 		Password string `cli:"*pass" usage:"User password (required)"`
+		SBOM     string `cli:"sbom" usage:"CycloneDX Json Filename"`
 	}
 
 	os.Exit(cli.Run(new(argT), func(ctx *cli.Context) error {
 		argv := ctx.Argv().(*argT)
 
-		gatherEvidence(argv.Userid, argv.Password)
+		gatherEvidence(argv.Userid, argv.Password, argv.SBOM)
 		return nil
 	}))
 }
