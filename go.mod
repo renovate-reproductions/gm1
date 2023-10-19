@@ -6,6 +6,7 @@ require (
 	github.com/mkideal/cli v0.2.7
 	github.com/ortelius/scec-commons v0.1.19
 	github.com/pelletier/go-toml v1.9.5
+	github.com/pelletier/go-toml/v2 v2.1.0
 )
 
 require golang.org/x/net v0.17.0 // indirect
