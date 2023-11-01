@@ -40,6 +40,8 @@ github.com/multiformats/go-multihash v0.2.3 h1:7Lyc8XfX/IY2jWb/gI7JP+o7JEq9hOa7B
 github.com/multiformats/go-varint v0.0.7 h1:sWSGR+f/eu5ABZA2ZpYKBILXTTs9JWpdEM/nEGOHFS8=
 github.com/ortelius/scec-commons v0.1.19 h1:TsDoQg3ZKV+RaioNbSEQCnVg+UYqHBM/FPfJXTWXnjM=
 github.com/ortelius/scec-commons v0.1.19/go.mod h1:VciTIdoAugf76sZAlyoXtKEYVTrYjsTcjeUq7tl4//E=
+github.com/ortelius/scec-commons v0.1.25 h1:qanWKYKOrNhNbuhY7I5SRl91zgf79ucsM8ImddnphQk=
+github.com/ortelius/scec-commons v0.1.25/go.mod h1:HSUWpcyyU9o8AOddwfqJJm+y/KTzj/m0vMSSnImYHVU=
 github.com/pelletier/go-toml v1.9.5 h1:4yBQzkHv+7BHq2PQUZF3Mx0IYxG7LsP222s7Agd3ve8=
 github.com/pelletier/go-toml v1.9.5/go.mod h1:u1nR/EPcESfeI/szUZKdtJ0xRNbUoANCkoOuaOx1Y+c=
 github.com/pelletier/go-toml/v2 v2.1.0/go.mod h1:tJU2Z3ZkXwnxa4DPO899bsyIoywizdUvyaeZurnPPDc=
