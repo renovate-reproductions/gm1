@@ -5,6 +5,8 @@ Application_Version = "10.0.0"
 Name = "${Domain}.${COMPNAME}"
 Variant = "${GIT_BRANCH}"
 Version = "${IMAGE_VERSION}"
+DockerRepo = "quay.io/ortelius/ms-dep-pkg-r"
+DockerTag = "main-v10.0.444-g175c1d"
 
 [Attributes]
      ServiceOwner = "${Domain}.ortelius"

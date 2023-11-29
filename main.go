@@ -2,6 +2,8 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -12,7 +14,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/anchore/syft/syft/format/cyclonedxjson"
+	"github.com/anchore/syft/syft/format/spdxjson"
+	"github.com/anchore/syft/syft/sbom"
 	"github.com/araddon/dateparse"
+	"github.com/docker/buildx/util/imagetools"
 	resty "github.com/go-resty/resty/v2"
 	"github.com/mkideal/cli"
 	model "github.com/ortelius/scec-commons/model"
@@ -24,6 +30,74 @@ const (
 	SwaggerFile int = 1 // SwaggerFile is used to read the Swagger/OpenApi file
 	ReadmeFile  int = 2 // ReadmeFile is used to read the Readme file
 )
+
+func getSBOMFromImage(imageRef string) string {
+
+	// Create a new context.
+	ctx := context.Background()
+
+	// Create a new image inspect client.
+	var inspectClient *imagetools.Printer
+	var err error
+
+	if inspectClient, err = imagetools.NewPrinter(ctx, imagetools.Opt{}, imageRef, "{{ json .SBOM.SPDX }}"); err != nil {
+		fmt.Printf("Could not load SBOM from image %s: %v", imageRef, err)
+		return ""
+	}
+
+	buf := new(bytes.Buffer)
+	inspectClient.Print(false, buf)
+
+	// Convert string to io.Reader
+	str := buf.String()
+	reader := strings.NewReader(str)
+
+	// Decode the image SPDX SBOM
+	var spdxSBOM *sbom.SBOM
+	var format sbom.FormatID
+	var version string
+
+	spdxdecoder := spdxjson.NewFormatDecoder()
+	if spdxSBOM, format, version, err = spdxdecoder.Decode(reader); err != nil {
+		fmt.Printf("Could not convert image %s: %v", imageRef, err)
+		return ""
+	}
+	fmt.Printf("Converted %s from %s %s", imageRef, format, version)
+
+	// Create a CycloneDX Encoder
+	var cyclonedx sbom.FormatEncoder
+
+	if cyclonedx, err = cyclonedxjson.NewFormatEncoderWithConfig(cyclonedxjson.DefaultEncoderConfig()); err != nil {
+		fmt.Printf("Error converting to CycloneDX %s: %v", imageRef, err)
+		return ""
+	}
+
+	// Convert the SPDX SBOM ot CycloneDX SBOM
+	buf = new(bytes.Buffer)
+	cyclonedx.Encode(buf, *spdxSBOM)
+	return buf.String()
+}
+
+func getProvenanceFromImage(imageRef string) string {
+
+	// Create a new context.
+	ctx := context.Background()
+
+	// Create a new image inspect client.
+	var inspectClient *imagetools.Printer
+	var err error
+
+	if inspectClient, err = imagetools.NewPrinter(ctx, imagetools.Opt{}, imageRef, "{{ json .Provenance }}"); err != nil {
+		fmt.Printf("Could not load Provenance from image %s: %v", imageRef, err)
+		return ""
+	}
+
+	buf := new(bytes.Buffer)
+	inspectClient.Print(false, buf)
+
+	// Convert string to io.Reader
+	return buf.String()
+}
 
 // resolveVars will resolve the ${var} with a value from the component.toml or environment variables
 func resolveVars(val string, data map[interface{}]interface{}) string {
@@ -516,6 +590,54 @@ func gatherEvidence(Userid string, Password string, SBOM string) {
 
 			compver.SBOMKey = res.Key
 		}
+	}
+
+	imageRef := ""
+	if len(attrs.DockerRepo) > 0 {
+		if len(attrs.DockerSha) > 0 {
+			imageRef = fmt.Sprintf("%s@sha256:%s", attrs.DockerRepo, attrs.DockerSha)
+		} else if len(attrs.DockerTag) > 0 {
+			imageRef = fmt.Sprintf("%s:%s", attrs.DockerRepo, attrs.DockerTag)
+		}
+
+		sbomString := getSBOMFromImage(imageRef)
+
+		if len(sbomString) > 0 {
+			sbom := model.NewSBOM()
+			sbom.Content = json.RawMessage(sbomString)
+
+			// POST Struct, default is JSON content type. No need to set one
+			var res model.ResponseKey
+			resp, err := client.R().
+				SetBody(sbom).
+				SetResult(&res).
+				Post("http://localhost:8081/msapi/sbom")
+
+			fmt.Printf("%s=%v\n", resp, err)
+			fmt.Printf("KEY=%s\n", res.Key)
+
+			compver.SBOMKey = res.Key
+		}
+
+		provenanceString := getProvenanceFromImage(imageRef)
+
+		if len(provenanceString) > 0 {
+			provenance := model.NewProvenance()
+			provenance.Content = json.RawMessage(provenanceString)
+
+			// POST Struct, default is JSON content type. No need to set one
+			var res model.ResponseKey
+			resp, err := client.R().
+				SetBody(provenance).
+				SetResult(&res).
+				Post("http://localhost:8081/msapi/provenance")
+
+			fmt.Printf("%s=%v\n", resp, err)
+			fmt.Printf("KEY=%s\n", res.Key)
+
+			compver.ProvenanceKey = res.Key
+		}
+
 	}
 
 	// POST Struct, default is JSON content type. No need to set one
