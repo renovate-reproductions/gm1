@@ -9,7 +9,7 @@ require (
 	github.com/docker/buildx v0.12.1
 	github.com/mkideal/cli v0.2.7
 	github.com/ortelius/scec-commons v0.1.26
-	github.com/pelletier/go-toml v1.9.5
+	github.com/pelletier/go-toml/v2 v2.1.1
 	github.com/pelletier/go-toml/v2 v2.1.1
 )
 
